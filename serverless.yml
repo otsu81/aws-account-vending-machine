@@ -1,0 +1,300 @@
+service: accountVendingMachine
+plugins:
+  - serverless-python-requirements
+  - serverless-pseudo-parameters
+  - serverless-step-functions
+
+custom:
+  stateMachineName: accountVendingMachine
+  pythonRequirements:
+    dockerizePip: true # Dockerize pip to increase compatibility with Serverless framework
+    slim: true
+    noDeploy:  # can exlude common libraries to minimize package size
+      - pytest
+      - docutils
+      - jmespath
+      - pip
+      - python-dateutil
+      - s3transfer
+      - setuptools
+      - six
+      - urllib3
+
+provider:
+  name: aws
+  runtime: python3.8
+  region: eu-west-1
+  stackName: accountVendingMachine
+  stage: dev
+  environment:
+    TEAMS_WEBHOOK: ${file(env.yml):teams_webhook}
+    S3_BUCKET: ${file(env.yml):s3_bucket}
+    LOGLEVEL: ${file(env.yml):loglevel}
+
+  iamRoleStatements:
+  - Effect: Allow
+    Action:
+    - organizations:CreateAccount
+    - organizations:DescribeAccount
+    - organizations:ListAccounts
+    - organizations:ListAccountsForParent
+    - organizations:ListChildren
+    - organizations:ListOrganizationalUnitsForParent
+    - organizations:ListParents
+    - organizations:ListRoots
+    - organizations:MoveAccount
+    - organizations:TagResource
+    - organizations:UntagResource
+    - ses:SendEmail
+    - ses:SendRawEmail
+    - ses:SendTemplatedEmail
+    - sts:AssumeRole
+    Resource: "*"
+  - Effect: Allow
+    Action:
+    - s3:GetBucketAcl
+    - s3:GetBucketPolicy
+    - s3:GetBucketPolicyStatus
+    - s3:GetObject
+    - s3:GetObjectAcl
+    - s3:GetObjectVersion
+    Resource:
+    - !Join
+      - ""
+      - - "arn:aws:s3:::"
+        - "${file(env.yml):s3_bucket}"
+    - !Join
+      - ""
+      - - "arn:aws:s3:::"
+        - "${file(env.yml):s3_bucket}"
+        - "/*"
+
+package:
+  individually: true
+  excludeDevDependencies: true
+  exclude:
+  - __pycache__/**
+  - .venv/**
+  - .vscode/**
+  - testEvents/**
+  - node_modules/**
+  - package.json
+  - package-lock.json
+
+# ---- lambda functions ----
+functions:
+  S3EventFunction:
+    handler: src/handlers/s3Event/step_s3_event.main
+    memorySize: 512
+    timeout: 120
+    description: Looks for json files being put in the S3 bucket
+    environment: # Function level environment variables
+      STEPFUNCTION_ARN:
+        Fn::Join:
+        - ""
+        - - "arn:aws:states:"
+          - "#{AWS::Region}:"
+          - "#{AWS::AccountId}:"
+          - "stateMachine:"
+          - "${self:custom.stateMachineName}"
+    package:
+      include:
+        - src/handlers/s3Event/step_s3_event.py
+    events:
+      - s3:
+          bucket: ${file(env.yml):s3_bucket}
+          event: s3:ObjectCreated:*
+          rules:
+            - suffix: .json
+          existing: true
+    layers:
+      - { Ref: TeamsBroadcasterLambdaLayer }
+
+  CreateAccountFunction:
+    handler: src/handlers/createAccount/step_create_account.main
+    # handler: src/handlers/createAccount/step_mock_create_account.main
+    memorySize: 512
+    timeout: 900
+    description: Creates a new AWS account
+    environment:
+      DEFAULT_ORG_ADMIN_ROLE: ${file(env.yml):default_org_admin_role}
+      IAM_USER_ACCESS_TO_BILLING: ${file(env.yml):iam_user_access_to_billing}
+    package:
+      include:
+        - src/handlers/createAccounts/step_create_account.py
+        - src/handlers/createAccounts/step_mock_create_account.py
+
+    layers:
+      - { Ref: TeamsBroadcasterLambdaLayer }
+
+  CheckAccountReadyFunction:
+    handler: src/handlers/checkAccountReady/check_account_ready_state.main
+    memorysize: 128
+    timeout: 900
+    description: Polls STS to discern when the account is ready
+    layers:
+      - { Ref: BotoFactoryLambdaLayer }
+    package:
+      include:
+        - src/handlers/checkAccountReady/check_account_ready_state.py
+      exclude:
+        - "*"
+        - "*/**"
+
+
+  SetPwPolicyFunction:
+    handler: src/handlers/pwPolicy/step_pw_policy.main
+    memorySize: 128
+    timeout: 30
+    description: Sets a password policy as defined in the function
+    environment:
+      DEFAULT_ORG_ADMIN_ROLE: ${file(env.yml):default_org_admin_role}
+      LOGLEVEL: ${file(env.yml):loglevel}
+    package:
+      include:
+        - src/handlers/pwPolicy/step_pw_policy.py
+    layers:
+      - { Ref: TeamsBroadcasterLambdaLayer }
+      - { Ref: BotoFactoryLambdaLayer }
+
+  MoveAccountToOUFunction:
+    handler: src/handlers/moveAccount/step_move_account.main
+    memorySize: 128
+    timeout: 60
+    description: Tries to move an account from root OU in an Organization to one specified in input
+    environment:
+      LOGLEVEL: ${file(env.yml):loglevel}
+    package:
+      include:
+        - src/handlers/moveAccount/step_move_account.py
+    layers:
+      - { Ref: TeamsBroadcasterLambdaLayer }
+
+  TagAccountFunction:
+    handler: src/handlers/tagAccount/step_tag_account.main
+    memorySize: 128
+    timeout: 60
+    description: Tags an account according to the Tags present in the event input
+    package:
+      include:
+        - src/handlers/tagAccount/step_tag_account.py
+
+  EmailAccountDetailsFunction:
+    handler: src/handlers/emailAccountDetails/step_email_account_details.main
+    memorySize: 256
+    timeout: 60
+    description: Sends an email based on account details provided in the event input
+    package:
+      include:
+      - src/handlers/emailAccountDetails/step_email_account_details.py
+      - resources/email_body.html
+      exclude:
+      - "*"
+      - "*/**"
+    environment:
+      SES_ACCOUNT: ${file(env.yml):ses_account}
+      SES_ROLE: ${file(env.yml):ses_role}
+      SES_REGION: ${file(env.yml):ses_region}
+      FROM_EMAIL: ${file(env.yml):from_email}
+      REPLY_TO_EMAIL: ${file(env.yml):reply_to_email}
+    layers:
+      - { Ref: BotoFactoryLambdaLayer }
+
+
+layers:
+  teamsBroadcaster:
+    name: ${self:service}-teamsBroadcasterLayer
+    path: src/layers/teamsBroadcaster
+    package:
+      include:
+        - src/layers/teamsBroadcaster/python/teams_broadcaster.py
+    description: Layer for sending messages to a Teams channel as defined by environment webhook
+    compatibleRuntimes:
+      - python3.8
+  botoFactory:
+    name: ${self:service}-botoFactory
+    path: src/layers/botoFactory
+    package:
+      include:
+        - src/layers/botoFactory/python/teams_broadcaster.py
+    description: Layer for BotoFactory
+    compatibleRuntimes:
+      - python3.8
+
+# ----- step function -----
+stepFunctions:
+  stateMachines:
+    accountVendingMachine:
+      name: ${self:custom.stateMachineName}
+      definition:
+        Comment: Account Vending Machine uses input dictionary and creates a new AWS account
+        StartAt: CreateAccountState
+        States:
+          CreateAccountState:
+            Type: Task
+            Resource:
+              !GetAtt [CreateAccountFunction, Arn]
+            Next: CheckAccountStatus
+          CheckAccountStatus:
+            Type: Choice
+            Choices:
+              - Variable: $.State
+                StringEquals: SUCCEEDED
+                Next: CheckAccountReadyState
+              - Variable: $.State
+                StringEquals: FAILED
+                Next: CreateFailedState
+          CreateFailedState:
+            Type: Fail
+            Cause: Account creation failed
+
+          CheckAccountReadyState:
+            Type: Task
+            Resource:
+              !GetAtt [CheckAccountReadyFunction, Arn]
+            Retry:
+              - ErrorEquals:
+                - "States.ALL"
+                IntervalSeconds: 3
+                MaxAttempts: 5
+                BackoffRate: 2
+            Next: AccountOperations
+
+          AccountOperations:
+            Type: Parallel
+            Next: EmailAccountDetailsState
+            Branches:
+              - StartAt: PassEventData
+                States:
+                  PassEventData:
+                    Type: Pass
+                    End: true
+              - StartAt: TagAccountState
+                States:
+                  TagAccountState:
+                    Type: Task
+                    Resource:
+                      !GetAtt [TagAccountFunction, Arn]
+                    End: true
+              - StartAt: SetPwState
+                States:
+                  SetPwState:
+                    Type: Task
+                    Resource:
+                      !GetAtt [SetPwPolicyFunction, Arn]
+                    End: true
+              - StartAt: MoveAccountState
+                States:
+                  MoveAccountState:
+                    Type: Task
+                    Resource:
+                      !GetAtt [MoveAccountToOUFunction, Arn]
+                    End: true
+
+          EmailAccountDetailsState:
+            Type: Task
+            Resource:
+              !GetAtt [EmailAccountDetailsFunction, Arn]
+            Next: CreateSuccessState
+          CreateSuccessState:
+            Type: Succeed

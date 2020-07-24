@@ -1,0 +1,11 @@
+{
+    "AccountName": "Account Creation Test",
+    "Email": "aws+test1@test.com",
+    "Tags": [
+        {
+        "Key": "Owner",
+        "Value": "owner@test.com"
+        }
+    ],
+    "AccountId": "123456789012"
+}

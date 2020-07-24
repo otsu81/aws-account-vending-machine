@@ -1,0 +1,32 @@
+{
+    "AccountName": "Account Creation Test",
+    "Email": "aws+test1@test.com",
+    "RoleName": "OrganizationsAccount",
+    "Tags" : [
+        {
+            "Key": "Owner",
+            "Value": "owner@test.com"
+        },
+        {
+            "Key": "CostCenter",
+            "Value": "1234"
+        },
+        {
+            "Key": "Organization",
+            "Value": "OU Name"
+        }
+    ],
+    "AccountId": "123456789012",
+    "State": "SUCCEEDED",
+    "PasswordPolicy": {
+        "MinimumPasswordLength": 16,
+        "RequireSymbols": false,
+        "RequireNumbers": true,
+        "RequireUppercaseCharacters": true,
+        "RequireLowercaseCharacters": true,
+        "AllowUsersToChangePassword": true,
+        "MaxPasswordAge": 90,
+        "PasswordReusePrevention": 10,
+        "HardExpiry": true
+    }
+}

@@ -1,0 +1,11 @@
+.vscode/
+.DS_Store
+.serverless/
+.venv/
+node_modules/
+__pycache__/
+*sandbox*
+*.pyc
+env.yml
+package.json
+package-lock.json
