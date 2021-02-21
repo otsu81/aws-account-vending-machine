@@ -6,7 +6,7 @@ Most actions are also broadcast to a Teams channel as the steps are completed.
 
 ## Usage
 
-Describes the current deployment in a Master Organization ("master") account. The Stepfunction is `arn:aws:states:eu-west-1:462776197309:stateMachine:accountVendingMachine`.
+Describes the current deployment in a Master Organization ("master") account. The Stepfunction is `arn:aws:states:{region}:{accountId}:stateMachine:accountVendingMachine`.
 
 The usage described below assumes that the operator has...
 * write permissions to the S3 bucket specified in the template (something like `arn:aws:s3:::vending-machine-json-input`)
